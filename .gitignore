@@ -1,0 +1,9 @@
+# Ignore Terraform state files
+*.tfstate
+*.tfstate.*
+
+# Ignore Terraform variables files that might contain sensitive data
+*.tfvars
+
+# Ignore the .terraform directory where providers are stored
+.terraform/
