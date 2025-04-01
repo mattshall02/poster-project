@@ -1,0 +1,24 @@
+steps:
+  # Build the Docker image from the flask-backend directory
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/the-flat-file/poster-backend', '.']
+    dir: 'flask-backend'
+  
+  # Push the Docker image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/the-flat-file/poster-backend']
+  
+  # Deploy the new image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    args:
+      [
+        'gcloud', 'run', 'deploy', 'poster-backend',
+        '--image', 'gcr.io/the-flat-file/poster-backend',
+        '--platform', 'managed',
+        '--region', 'us-central1',
+        '--add-cloudsql-instances', 'the-flat-file:us-central1:poster-db',
+        '--set-env-vars', 'DB_HOST=/cloudsql/the-flat-file:us-central1:poster-db,DB_NAME=posterdb,DB_USER=postgres,DB_PASSWORD=Q[gQ)k8t:o6DTl/Z',
+        '--allow-unauthenticated'
+      ]
+images:
+  - 'gcr.io/the-flat-file/poster-backend'
