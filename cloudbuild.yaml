@@ -1,3 +1,6 @@
+options:
+  logging: CLOUD_LOGGING_ONLY
+
 steps:
   # Build the Docker image from the flask-backend directory
   - name: 'gcr.io/cloud-builders/docker'
