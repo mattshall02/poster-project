@@ -21,7 +21,7 @@ def get_db_connection():
 # Health-check endpoint
 @app.route("/")
 def hello():
-    return "Hello from Flask API on Cloud Run!"
+    return "Hello Crystal  from Flask API on Cloud Run!"
 
 # Endpoint to fetch posters (assumes a 'posters' table exists)
 @app.route("/posters")
