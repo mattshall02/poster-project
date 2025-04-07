@@ -1,8 +1,19 @@
 from flask import Flask, jsonify, request
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import psycopg2
 
 app = Flask(__name__)
+
+app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "your-secret-key")
+jwt = JWTManager(app)
+
+# Configure the secret key for signing JWTs (in production, use a secure key and manage via environment variables)
+app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "your-secret-key")  # Change "your-secret-key" to a secure key
+jwt = JWTManager(app)
+
+
 
 # Function to connect to the PostgreSQL database
 def get_db_connection():
@@ -22,6 +33,71 @@ def get_db_connection():
 @app.route("/")
 def hello():
     return "Hello Crystal  from Flask API on Cloud Run!"
+
+# Login Endpoint
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    username = data.get("username")
+    password = data.get("password")
+    
+    if not username or not password:
+        return jsonify({"msg": "Username and password required"}), 400
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"msg": "Database connection failed"}), 500
+    cur = conn.cursor()
+    try:
+        # Fetch the user's password hash from the database
+        cur.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"msg": "Bad username or password"}), 401
+
+        user_id, password_hash = row
+        if not check_password_hash(password_hash, password):
+            return jsonify({"msg": "Bad username or password"}), 401
+    except Exception as e:
+        print("Error during login:", e)
+        return jsonify({"msg": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+    # Create a new token with the user identity
+    access_token = create_access_token(identity=username)
+    return jsonify(access_token=access_token), 200
+
+#Profile Endpoint
+
+@app.route("/profile", methods=["GET"])
+@jwt_required()
+def profile():
+    current_user = get_jwt_identity()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, username, email, created_at FROM users WHERE username = %s", (current_user,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "User not found"}), 404
+        user = {
+            "id": row[0],
+            "username": row[1],
+            "email": row[2],
+            "created_at": row[3].isoformat() if row[3] else None
+        }
+    except Exception as e:
+        print("Error fetching user profile:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+    return jsonify(user), 200
+
 
 # Endpoint to fetch posters (assumes a 'posters' table exists)
 @app.route("/posters")
@@ -44,6 +120,7 @@ def get_posters():
 
 # Poster Insert via POST
 @app.route("/posters", methods=["POST"])
+@jwt_required()
 def create_poster():
     data = request.get_json()
     title = data.get("title")
@@ -73,6 +150,7 @@ def create_poster():
 
 # Poster Update via PUT
 @app.route("/posters/<int:poster_id>", methods=["PUT"])
+@jwt_required()
 def update_poster(poster_id):
     data = request.get_json()
     title = data.get("title")
@@ -104,6 +182,7 @@ def update_poster(poster_id):
 
 # Delete Poster via DELETE
 @app.route("/posters/<int:poster_id>", methods=["DELETE"])
+@jwt_required()
 def delete_poster(poster_id):
     conn = get_db_connection()
     if not conn:
@@ -122,6 +201,45 @@ def delete_poster(poster_id):
         cur.close()
         conn.close()
     return jsonify({"message": f"Poster {poster_id} deleted"})
+
+# User Registration Endpoint
+@app.route("/register", methods=["POST"])
+def register():
+    data = request.get_json()
+    username = data.get("username")
+    password = data.get("password")
+    email = data.get("email", None)
+
+    if not username or not password:
+        return jsonify({"error": "Username and password are required"}), 400
+
+    # Hash the password for secure storage
+    password_hash = generate_password_hash(password)
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    cur = conn.cursor()
+    try:
+        # Check if the username already exists
+        cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+        if cur.fetchone():
+            return jsonify({"error": "Username already exists"}), 409
+
+        # Insert the new user
+        cur.execute(
+            "INSERT INTO users (username, password_hash, email) VALUES (%s, %s, %s) RETURNING id",
+            (username, password_hash, email)
+        )
+        user_id = cur.fetchone()[0]
+        conn.commit()
+    except Exception as e:
+        print("Error during registration:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+    return jsonify({"id": user_id, "username": username, "email": email}), 201
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
