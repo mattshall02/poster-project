@@ -5,10 +5,11 @@ const Posters = ({ token }) => {
   const [posters, setPosters] = useState([]);
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
+  const [selectedFile, setSelectedFile] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // Fetch the list of posters on component mount
+  // Fetch posters on mount
   useEffect(() => {
     const fetchPosters = async () => {
       try {
@@ -30,23 +31,27 @@ const Posters = ({ token }) => {
     fetchPosters();
   }, []);
 
-  // Handler to submit a new poster
+  // Handler to create a new poster with optional photo
   const handleCreatePoster = async (event) => {
     event.preventDefault();
     setError(null);
 
+    // Create a FormData object to send multipart/form-data
+    const formData = new FormData();
+    formData.append("title", newTitle);
+    formData.append("description", newDescription);
+    if (selectedFile) {
+      formData.append("photo", selectedFile);
+    }
+
     try {
-      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/posters`, {
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/posters/upload`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          // If your POST endpoint requires JWT auth, include it:
+          // Do NOT set 'Content-Type'; the browser will set it when using FormData.
           'Authorization': token ? `Bearer ${token}` : ''
         },
-        body: JSON.stringify({
-          title: newTitle,
-          description: newDescription,
-        }),
+        body: formData,
       });
 
       if (!response.ok) {
@@ -55,11 +60,10 @@ const Posters = ({ token }) => {
       }
 
       const createdPoster = await response.json();
-      // Update the list with the new poster
       setPosters([...posters, createdPoster]);
-      // Clear the form
       setNewTitle('');
       setNewDescription('');
+      setSelectedFile(null);
     } catch (err) {
       setError(err.message);
     }
@@ -73,7 +77,12 @@ const Posters = ({ token }) => {
       <ul>
         {posters.map((poster) => (
           <li key={poster.id}>
-            <strong>{poster.title}</strong> - {poster.description}
+            <strong>{poster.title}</strong> - {poster.description}  
+            {poster.photo_url && (
+              <div>
+                <img src={poster.photo_url} alt={poster.title} style={{ maxWidth: "200px" }} />
+              </div>
+            )}
           </li>
         ))}
       </ul>
@@ -95,6 +104,14 @@ const Posters = ({ token }) => {
             value={newDescription}
             onChange={(e) => setNewDescription(e.target.value)}
             required
+          />
+        </div>
+        <div>
+          <label>Photo: </label>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => setSelectedFile(e.target.files[0])}
           />
         </div>
         <button type="submit">Create Poster</button>
