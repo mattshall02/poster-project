@@ -1,6 +1,7 @@
 import os
 import uuid
 import re
+import traceback
 import psycopg2
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -9,18 +10,20 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from google.cloud import storage
 
-# Initialize Flask app and enable CORS for all routes
+# Initialize Flask app
 app = Flask(__name__)
+
+# Enable CORS for all routes (for development use; restrict in production)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Configure JWT and its secret key
+# Configure JWT
 app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "your-secret-key")
 jwt = JWTManager(app)
 
-# Initialize the serializer for token generation (e.g., password reset, email verification)
+# Initialize itsdangerous serializer (used for password reset and email verification)
 serializer = URLSafeTimedSerializer(app.config["JWT_SECRET_KEY"])
 
-# Use the specified bucket name; default to your bucket if not set in environment variables
+# Set Cloud SQL and Cloud Storage configuration from environment variables
 BUCKET_NAME = os.environ.get("POSTER_BUCKET_NAME", "poster-app-photos-137340833578")
 
 def get_db_connection():
@@ -36,21 +39,26 @@ def get_db_connection():
         return None
 
 def upload_file_to_bucket(file_obj, bucket_name, destination_blob_name):
-    """Uploads a file to a Google Cloud Storage bucket and returns its public URL."""
-    # Sanitize the destination blob name to contain only acceptable characters
+    """
+    Uploads a file to a Google Cloud Storage bucket and returns its public URL.
+    The destination blob name is sanitized to allow only certain characters.
+    """
     safe_blob_name = re.sub(r'[^a-z0-9\-_.]', '', destination_blob_name.lower())
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(safe_blob_name)
-    
-    # Upload the file from the file object
-    blob.upload_from_file(file_obj, content_type=file_obj.content_type)
-    
-    # Make the blob publicly accessible
-    blob.make_public()
-    return blob.public_url
+    try:
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(safe_blob_name)
+        # Reset the file pointer in case it has been read already.
+        file_obj.seek(0)
+        blob.upload_from_file(file_obj, content_type=file_obj.content_type)
+        blob.make_public()
+        return blob.public_url
+    except Exception as e:
+        print("Error uploading file:", e)
+        print(traceback.format_exc())
+        raise
 
-# ----- User Endpoints -----
+# ---------------- User Endpoints -----------------
 
 @app.route("/register", methods=["POST"])
 def register():
@@ -58,7 +66,6 @@ def register():
     username = data.get("username")
     password = data.get("password")
     email = data.get("email", None)
-
     if not username or not password:
         return jsonify({"error": "Username and password are required"}), 400
 
@@ -71,7 +78,6 @@ def register():
         cur.execute("SELECT id FROM users WHERE username = %s", (username,))
         if cur.fetchone():
             return jsonify({"error": "Username already exists"}), 409
-
         cur.execute(
             "INSERT INTO users (username, password_hash, email) VALUES (%s, %s, %s) RETURNING id",
             (username, password_hash, email)
@@ -103,7 +109,6 @@ def login():
         row = cur.fetchone()
         if not row:
             return jsonify({"msg": "Bad username or password"}), 401
-
         user_id, password_hash = row
         if not check_password_hash(password_hash, password):
             return jsonify({"msg": "Bad username or password"}), 401
@@ -241,7 +246,7 @@ def verify_email():
         conn.close()
     return jsonify({"message": f"Email verified for user '{username}'", "user": {"id": row[0], "username": row[1], "email": row[2], "is_verified": row[3]}}), 200
 
-# ----- Poster Endpoints -----
+# ---------------- Poster Endpoints -----------------
 
 @app.route("/posters", methods=["GET"])
 def get_posters():
@@ -273,7 +278,6 @@ def create_poster():
     data = request.get_json()
     title = data.get("title")
     description = data.get("description")
-    
     if not title:
         return jsonify({"error": "Title is required"}), 400
 
@@ -282,10 +286,8 @@ def create_poster():
         return jsonify({"error": "Database connection failed"}), 500
     cur = conn.cursor()
     try:
-        cur.execute(
-            "INSERT INTO posters (title, description) VALUES (%s, %s) RETURNING id",
-            (title, description)
-        )
+        cur.execute("INSERT INTO posters (title, description) VALUES (%s, %s) RETURNING id",
+                    (title, description))
         poster_id = cur.fetchone()[0]
         conn.commit()
     except Exception as e:
@@ -313,7 +315,7 @@ def create_poster_with_photo():
         try:
             photo_url = upload_file_to_bucket(file_obj, BUCKET_NAME, filename)
         except Exception as e:
-            print("Error uploading file:", e)
+            print("Error in /posters/upload:", e)
             return jsonify({"error": "Failed to upload image"}), 500
 
     conn = get_db_connection()
