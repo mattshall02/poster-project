@@ -524,6 +524,73 @@ def admin_delete_user(username):
         "user": {"id": row[0], "username": row[1], "email": row[2]}
     }), 200
 
+
+
+
+@app.route("/posters/upload", methods=["POST"])
+@jwt_required()
+def create_poster_with_photo():
+    # Get text fields from form data
+    title = request.form.get("title")
+    description = request.form.get("description")
+
+    if not title:
+        return jsonify({"error": "Title is required"}), 400
+
+    # Get the file from the request (if provided)
+    file_obj = request.files.get("photo")
+
+    photo_url = None
+    if file_obj:
+        # Generate a unique filename using uuid
+        filename = f"{uuid.uuid4()}_{file_obj.filename}"
+        try:
+            # Upload the file to the bucket and return its public URL
+            photo_url = upload_file_to_bucket(file_obj, BUCKET_NAME, filename)
+        except Exception as e:
+            print("Error uploading file:", e)
+            return jsonify({"error": "Failed to upload image"}), 500
+
+    # Insert the poster details into the database
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO posters (title, description, photo_url) VALUES (%s, %s, %s) RETURNING id",
+            (title, description, photo_url)
+        )
+        poster_id = cur.fetchone()[0]
+        conn.commit()
+    except Exception as e:
+        print("Error creating poster:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+        
+    return jsonify({
+        "id": poster_id,
+        "title": title,
+        "description": description,
+        "photo_url": photo_url
+    }), 201
+
+def upload_file_to_bucket(file_obj, bucket_name, destination_blob_name):
+    """Uploads a file to a Google Cloud Storage bucket and returns its public URL."""
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+    
+    # Upload file contents; stream it from the uploaded file object
+    blob.upload_from_file(file_obj, content_type=file_obj.content_type)
+    
+    # Make the file publicly accessible
+    blob.make_public()
+    
+    return blob.public_url
+
 if __name__ == "__main__":
     # Read the port from the environment, default to 8080 if not set
     port = int(os.environ.get("PORT", 8080))
