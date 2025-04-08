@@ -1,19 +1,25 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import os
 import psycopg2
 
+# Create the Flask app
 app = Flask(__name__)
 
+# Option 1: Allow CORS for all domains on all routes
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Set configuration (JWT secret, etc.)
 app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "your-secret-key")
+
+# Now, create the JWTManager
 jwt = JWTManager(app)
 
-# Configure the secret key for signing JWTs (in production, use a secure key and manage via environment variables)
-app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "your-secret-key")  # Change "your-secret-key" to a secure key
-jwt = JWTManager(app)
-
-
+# Now create the serializer using the secret key from the app's config.
+serializer = URLSafeTimedSerializer(app.config["JWT_SECRET_KEY"])
 
 # Function to connect to the PostgreSQL database
 def get_db_connection():
@@ -240,6 +246,284 @@ def register():
         cur.close()
         conn.close()
     return jsonify({"id": user_id, "username": username, "email": email}), 201
+
+#Update Profile
+@app.route("/profile", methods=["PUT"])
+@jwt_required()
+def update_profile():
+    current_user = get_jwt_identity()  # Get the username from the JWT token
+    data = request.get_json()
+
+    # Get new values from the request; these are optional.
+    new_email = data.get("email")
+    new_password = data.get("password")
+
+    # If neither field is provided, there's nothing to update.
+    if new_email is None and new_password is None:
+        return jsonify({"error": "No updates provided"}), 400
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    cur = conn.cursor()
+
+    try:
+        if new_email is not None and new_password is not None:
+            # Both email and password provided; hash the new password.
+            password_hash = generate_password_hash(new_password)
+            cur.execute(
+                "UPDATE users SET email = %s, password_hash = %s WHERE username = %s RETURNING id, username, email",
+                (new_email, password_hash, current_user)
+            )
+        elif new_email is not None:
+            # Only updating the email.
+            cur.execute(
+                "UPDATE users SET email = %s WHERE username = %s RETURNING id, username, email",
+                (new_email, current_user)
+            )
+        elif new_password is not None:
+            # Only updating the password; hash the new password.
+            password_hash = generate_password_hash(new_password)
+            cur.execute(
+                "UPDATE users SET password_hash = %s WHERE username = %s RETURNING id, username, email",
+                (password_hash, current_user)
+            )
+        
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "User not found"}), 404
+        
+        conn.commit()
+        updated_user = {
+            "id": row[0],
+            "username": row[1],
+            "email": row[2]
+        }
+    except Exception as e:
+        print("Error updating profile:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+    
+    return jsonify(updated_user), 200
+
+#Delete User Profile
+@app.route("/profile", methods=["DELETE"])
+@jwt_required()
+def delete_profile():
+    current_user = get_jwt_identity()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM users WHERE username = %s RETURNING id, username, email", (current_user,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "User not found"}), 404
+        conn.commit()
+    except Exception as e:
+        print("Error deleting user:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+    return jsonify({
+        "message": f"User '{current_user}' deleted",
+        "user": {
+            "id": row[0],
+            "username": row[1],
+            "email": row[2]
+        }
+    }), 200
+
+#Forgot PAssword Endpoint
+@app.route("/forgot-password", methods=["POST"])
+def forgot_password():
+    data = request.get_json()
+    username = data.get("username")
+    
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
+
+    # Look up the user in the database
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+        user = cur.fetchone()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+    # Generate a reset token valid for 15 minutes (900 seconds)
+    token = serializer.dumps(username, salt="password-reset-salt")
+    # For testing, we'll just return the token.
+    # In production, you'd send this in an email.
+    return jsonify({"reset_token": token, "message": "Use this token with /reset-password within 15 minutes"}), 200
+
+#Password Reset Endpoint
+@app.route("/reset-password", methods=["POST"])
+def reset_password():
+    data = request.get_json()
+    token = data.get("token")
+    new_password = data.get("new_password")
+    
+    if not token or not new_password:
+        return jsonify({"error": "Token and new password are required"}), 400
+
+    try:
+        # Try to load the username from the token (expires in 15 minutes)
+        username = serializer.loads(token, salt="password-reset-salt", max_age=900)
+    except SignatureExpired:
+        return jsonify({"error": "The reset token has expired"}), 400
+    except BadSignature:
+        return jsonify({"error": "Invalid reset token"}), 400
+
+    # Hash the new password
+    new_password_hash = generate_password_hash(new_password)
+
+    # Update the user's password in the database
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE users SET password_hash = %s WHERE username = %s RETURNING id, username, email", 
+                    (new_password_hash, username))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "User not found"}), 404
+        conn.commit()
+    except Exception as e:
+        print("Error resetting password:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+    return jsonify({"message": f"Password updated for user '{username}'"}), 200
+
+#Request Verification Endpoint
+@app.route("/request-verification", methods=["POST"])
+@jwt_required()
+def request_verification():
+    # Get the current username from the JWT token
+    username = get_jwt_identity()
+    
+    # Generate a verification token that is valid for one hour (3600 seconds)
+    token = serializer.dumps(username, salt="email-verification-salt")
+    
+    # In production, you’d send this token via email. For now, return it in the response.
+    return jsonify({"verification_token": token, "message": "Use this token with /verify-email within one hour"}), 200
+
+#Verify Email Endpoint
+@app.route("/verify-email", methods=["POST"])
+def verify_email():
+    data = request.get_json()
+    token = data.get("token")
+    
+    if not token:
+        return jsonify({"error": "Token is required"}), 400
+    
+    try:
+        # Attempt to retrieve the username from the token; token expires in 1 hour.
+        username = serializer.loads(token, salt="email-verification-salt", max_age=3600)
+    except SignatureExpired:
+        return jsonify({"error": "The verification token has expired"}), 400
+    except BadSignature:
+        return jsonify({"error": "Invalid verification token"}), 400
+
+    # Update the user's email verification status in the database
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE users SET is_verified = TRUE WHERE username = %s RETURNING id, username, email, is_verified", (username,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "User not found"}), 404
+        conn.commit()
+    except Exception as e:
+        print("Error during email verification:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+    
+    return jsonify({"message": f"Email verified for user '{username}'", "user": {"id": row[0], "username": row[1], "email": row[2], "is_verified": row[3]}}), 200
+
+#User Admin Endpoints
+@app.route("/admin/users", methods=["GET"])
+@jwt_required()
+def admin_list_users():
+    current_user = get_jwt_identity()
+    if current_user != "admin":
+        return jsonify({"error": "Admin privileges required"}), 403
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, username, email, is_verified, created_at FROM users")
+        rows = cur.fetchall()
+        users_list = []
+        for row in rows:
+            users_list.append({
+                "id": row[0],
+                "username": row[1],
+                "email": row[2],
+                "is_verified": row[3],
+                "created_at": row[4].isoformat() if row[4] else None
+            })
+    except Exception as e:
+        print("Error listing users:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+    return jsonify(users_list), 200
+
+@app.route("/admin/users/<string:username>", methods=["DELETE"])
+@jwt_required()
+def admin_delete_user(username):
+    current_user = get_jwt_identity()
+    if current_user != "admin":
+        return jsonify({"error": "Admin privileges required"}), 403
+    if username == "admin":
+        return jsonify({"error": "Cannot delete admin user"}), 400
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM users WHERE username = %s RETURNING id, username, email", (username,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "User not found"}), 404
+        conn.commit()
+    except Exception as e:
+        print("Error deleting user:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+    return jsonify({
+        "message": f"User '{username}' deleted",
+        "user": {"id": row[0], "username": row[1], "email": row[2]}
+    }), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
