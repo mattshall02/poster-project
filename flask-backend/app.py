@@ -301,8 +301,16 @@ def create_poster():
 @app.route("/posters/upload", methods=["POST"])
 @jwt_required()
 def create_poster_with_photo():
+    # Log the incoming form data for debugging
+    print("Request form:", request.form)
+    
     title = request.form.get("title")
     description = request.form.get("description")
+    
+    # Debug logging: Print the extracted title and description
+    print("Extracted title:", title)
+    print("Extracted description:", description)
+    
     if not title:
         return jsonify({"error": "Title is required"}), 400
 
