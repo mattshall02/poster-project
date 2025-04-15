@@ -299,56 +299,67 @@ def create_poster():
     return jsonify({"id": poster_id, "title": title, "description": description}), 201
 
 @app.route("/posters/upload", methods=["POST"])
-@jwt_required()
+@jwt_required()  # You can comment this out temporarily for testing purposes.
 def create_poster_with_photo():
-    # Log the incoming form data for debugging
-    print("Request form:", request.form)
-    
-    title = request.form.get("title")
-    description = request.form.get("description")
-    
-    # Debug logging: Print the extracted title and description
-    print("Extracted title:", title)
-    print("Extracted description:", description)
-    
-    if not title:
-        return jsonify({"error": "Title is required"}), 400
-
-    file_obj = request.files.get("photo")
-    photo_url = None
-    if file_obj:
-        raw_filename = file_obj.filename or "upload"
-        safe_filename = re.sub(r'[^a-z0-9\-_.]', '', raw_filename.lower())
-        filename = f"{uuid.uuid4()}_{safe_filename}"
-        try:
-            photo_url = upload_file_to_bucket(file_obj, BUCKET_NAME, filename)
-        except Exception as e:
-            print("Error in /posters/upload:", e)
-            return jsonify({"error": "Failed to upload image"}), 500
-
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    cur = conn.cursor()
     try:
-        cur.execute(
-            "INSERT INTO posters (title, description, photo_url) VALUES (%s, %s, %s) RETURNING id",
-            (title, description, photo_url)
-        )
-        poster_id = cur.fetchone()[0]
-        conn.commit()
+        # Log the raw form data keys for debugging.
+        print("Request form keys:", list(request.form.keys()))
+        
+        title = request.form.get("title")
+        description = request.form.get("description")
+        print("Extracted title:", title)
+        print("Extracted description:", description)
+        
+        if not title:
+            print("Title is missing!")
+            return jsonify({"error": "Title is required"}), 400
+
+        file_obj = request.files.get("photo")
+        photo_url = None
+        if file_obj:
+            raw_filename = file_obj.filename or "upload"
+            # Sanitize the filename: lowercase & remove disallowed characters.
+            safe_filename = re.sub(r'[^a-z0-9\-_.]', '', raw_filename.lower())
+            filename = f"{uuid.uuid4()}_{safe_filename}"
+            print(f"Uploading file with filename: {filename}")
+            try:
+                photo_url = upload_file_to_bucket(file_obj, BUCKET_NAME, filename)
+                print("File successfully uploaded. Public URL:", photo_url)
+            except Exception as upload_e:
+                print("Error during file upload:", upload_e)
+                return jsonify({"error": "Failed to upload image", "details": str(upload_e)}), 500
+
+        # Insert the poster into the database
+        conn = get_db_connection()
+        if not conn:
+            print("Database connection failed.")
+            return jsonify({"error": "Database connection failed"}), 500
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO posters (title, description, photo_url) VALUES (%s, %s, %s) RETURNING id",
+                (title, description, photo_url)
+            )
+            poster_id = cur.fetchone()[0]
+            conn.commit()
+            print(f"Created poster with id: {poster_id}")
+        except Exception as db_e:
+            print("Error creating poster:", db_e)
+            return jsonify({"error": "Error creating poster", "details": str(db_e)}), 500
+        finally:
+            cur.close()
+            conn.close()
+            
+        return jsonify({
+            "id": poster_id,
+            "title": title,
+            "description": description,
+            "photo_url": photo_url
+        }), 201
     except Exception as e:
-        print("Error creating poster:", e)
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-    return jsonify({
-        "id": poster_id,
-        "title": title,
-        "description": description,
-        "photo_url": photo_url
-    }), 201
+        print("Unhandled exception in /posters/upload:", e)
+        print(traceback.format_exc())
+        return jsonify({"error": "An unexpected error occurred", "details": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
