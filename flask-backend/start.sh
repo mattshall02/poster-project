@@ -2,7 +2,7 @@
 # start.sh - Script to set environment variables and run the Flask app
 
 # Set environment variables
-export DB_HOST=/cloudsql/the-flat-file:us-central1:poster-db
+export DB_HOST="/cloudsql/the-flat-file:us-central1:poster-db"
 export DB_NAME=posterdb
 export DB_USER=postgres
 export DB_PASSWORD="Q[gQ)k8t:o6DTl/Z"
