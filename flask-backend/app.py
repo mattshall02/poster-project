@@ -324,6 +324,29 @@ def create_poster_with_photo():
         print("Unhandled exception in /posters/upload:", e)
         print(traceback.format_exc())
         return jsonify({"error": "An unexpected error occurred", "details": str(e)}), 500
+
+@app.route("/posters", methods=["GET"])
+def list_posters():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, title, description, photo_url FROM posters ORDER BY id DESC LIMIT 10")
+        rows = cur.fetchall()
+        posters = [{
+            "id": row[0],
+            "title": row[1],
+            "description": row[2],
+            "photo_url": row[3]
+        } for row in rows]
+        return jsonify(posters), 200
+    except Exception as e:
+        print("Error fetching posters:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
     
 @app.route("/debug-multipart", methods=["POST"])
 def debug_multipart():
