@@ -20,3 +20,4 @@ echo "PORT: $PORT"
 
 # Start the Flask app
 python3 app.py
+ 
