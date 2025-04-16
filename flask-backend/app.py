@@ -33,13 +33,21 @@ serializer = URLSafeTimedSerializer(app.config["JWT_SECRET_KEY"])
 BUCKET_NAME = os.environ.get("POSTER_BUCKET_NAME", "poster-app-photos-137340833578")
 
 def get_db_connection():
-    host = os.environ.get("DB_HOST", "/cloudsql/the-flat-file:us-central1:poster-db")
-    conn = psycopg2.connect(
-        host=host,
-        dbname=os.environ["DB_NAME"],
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"]
-)
+    dbname = os.environ["DB_NAME"]
+    user = os.environ["DB_USER"]
+    password = os.environ["DB_PASSWORD"]
+    socket_path = os.environ["DB_HOST"]
+    try:
+        conn = psycopg2.connect(
+            dbname=dbname,
+            user=user,
+            password=password,
+            host=socket_path
+        )
+        return conn
+    except Exception as e:
+        print("‼️ Database connection failed:", e)
+        return None
 
 def upload_file_to_bucket(file_obj, bucket_name, destination_blob_name):
     """
