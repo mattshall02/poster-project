@@ -1,5 +1,5 @@
 # Use an official Python runtime as a parent image
-FROM python:3.9-slim
+FROM python:3.10
 
 # Set the working directory in the container
 WORKDIR /app
@@ -18,4 +18,4 @@ EXPOSE 8080
 ENV FLASK_APP=app.py
 
 # Command to run the application
-CMD ["python", "app.py"]
+CMD ["./start.sh"]

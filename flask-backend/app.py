@@ -5,25 +5,31 @@ import traceback
 import psycopg2
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import (
+    JWTManager, 
+    create_access_token, 
+    jwt_required, 
+    get_jwt_identity,
+    verify_jwt_in_request,
+    decode_token # <-- Added this import
+)
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from google.cloud import storage
 
-# Initialize Flask app
+# Initialize Flask app and enable CORS
 app = Flask(__name__)
-
-# Enable CORS for all routes (for development use; restrict in production)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Configure JWT
+# Configure JWT settings; ensure token lookup is only from headers
 app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "your-secret-key")
+app.config["JWT_TOKEN_LOCATION"] = ["headers"]
 jwt = JWTManager(app)
 
-# Initialize itsdangerous serializer (used for password reset and email verification)
+# Initialize itsdangerous serializer
 serializer = URLSafeTimedSerializer(app.config["JWT_SECRET_KEY"])
 
-# Set Cloud SQL and Cloud Storage configuration from environment variables
+# Cloud Storage bucket name (default to your bucket)
 BUCKET_NAME = os.environ.get("POSTER_BUCKET_NAME", "poster-app-photos-137340833578")
 
 def get_db_connection():
@@ -31,8 +37,10 @@ def get_db_connection():
     dbname = os.environ.get("DB_NAME")
     user = os.environ.get("DB_USER")
     password = os.environ.get("DB_PASSWORD")
+    print(f"Connecting to database with host={host}, dbname={dbname}, user={user}")
     try:
-        conn = psycopg2.connect(host=host, database=dbname, user=user, password=password)
+        # Force a TCP connection using port 5432
+        conn = psycopg2.connect(host=host, database=dbname, user=user, password=password, port=5432)
         return conn
     except Exception as e:
         print("Database connection failed:", e)
@@ -40,21 +48,21 @@ def get_db_connection():
 
 def upload_file_to_bucket(file_obj, bucket_name, destination_blob_name):
     """
-    Uploads a file to a Google Cloud Storage bucket and returns its public URL.
-    The destination blob name is sanitized to allow only certain characters.
+    Uploads a file to Google Cloud Storage and returns its public URL.
     """
     safe_blob_name = re.sub(r'[^a-z0-9\-_.]', '', destination_blob_name.lower())
     try:
+        print(f"upload_file_to_bucket: Uploading file with blob name: {safe_blob_name}")
+        print("File content type:", file_obj.content_type)
+        file_obj.seek(0)  # Ensure file pointer is reset
         storage_client = storage.Client()
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(safe_blob_name)
-        # Reset the file pointer in case it has been read already.
-        file_obj.seek(0)
         blob.upload_from_file(file_obj, content_type=file_obj.content_type)
         blob.make_public()
         return blob.public_url
     except Exception as e:
-        print("Error uploading file:", e)
+        print("Error in upload_file_to_bucket:", e)
         print(traceback.format_exc())
         raise
 
@@ -248,68 +256,31 @@ def verify_email():
 
 # ---------------- Poster Endpoints -----------------
 
-@app.route("/posters", methods=["GET"])
-def get_posters():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT id, title, description, photo_url FROM posters")
-        rows = cur.fetchall()
-        posters = []
-        for row in rows:
-            posters.append({
-                "id": row[0],
-                "title": row[1],
-                "description": row[2],
-                "photo_url": row[3]
-            })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-    return jsonify(posters), 200
-
-@app.route("/posters", methods=["POST"])
-@jwt_required()
-def create_poster():
-    data = request.get_json()
-    title = data.get("title")
-    description = data.get("description")
-    if not title:
-        return jsonify({"error": "Title is required"}), 400
-
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    cur = conn.cursor()
-    try:
-        cur.execute("INSERT INTO posters (title, description) VALUES (%s, %s) RETURNING id",
-                    (title, description))
-        poster_id = cur.fetchone()[0]
-        conn.commit()
-    except Exception as e:
-        print("Error creating poster:", e)
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-    return jsonify({"id": poster_id, "title": title, "description": description}), 201
-
 @app.route("/posters/upload", methods=["POST"])
-@jwt_required()  # You can comment this out temporarily for testing purposes.
 def create_poster_with_photo():
     try:
-        # Log the raw form data keys for debugging.
-        print("Request form keys:", list(request.form.keys()))
+        # Manually extract and decode the JWT token from the Authorization header
+        auth_header = request.headers.get("Authorization", None)
+        if not auth_header:
+            return jsonify({"msg": "Missing Authorization header"}), 401
+        try:
+            token = auth_header.split()[1]
+        except IndexError:
+            return jsonify({"msg": "Invalid Authorization header format"}), 401
         
+        try:
+            decoded = decode_token(token)
+            current_user = decoded.get("sub")
+        except Exception as e:
+            return jsonify({"msg": "Token decoding failed", "error": str(e)}), 401
+
+        # Log the received form keys for debugging
+        print("Request form keys:", list(request.form.keys()))
         title = request.form.get("title")
         description = request.form.get("description")
         print("Extracted title:", title)
         print("Extracted description:", description)
-        
+
         if not title:
             print("Title is missing!")
             return jsonify({"error": "Title is required"}), 400
@@ -318,7 +289,6 @@ def create_poster_with_photo():
         photo_url = None
         if file_obj:
             raw_filename = file_obj.filename or "upload"
-            # Sanitize the filename: lowercase & remove disallowed characters.
             safe_filename = re.sub(r'[^a-z0-9\-_.]', '', raw_filename.lower())
             filename = f"{uuid.uuid4()}_{safe_filename}"
             print(f"Uploading file with filename: {filename}")
@@ -329,10 +299,8 @@ def create_poster_with_photo():
                 print("Error during file upload:", upload_e)
                 return jsonify({"error": "Failed to upload image", "details": str(upload_e)}), 500
 
-        # Insert the poster into the database
         conn = get_db_connection()
         if not conn:
-            print("Database connection failed.")
             return jsonify({"error": "Database connection failed"}), 500
         cur = conn.cursor()
         try:
@@ -349,17 +317,24 @@ def create_poster_with_photo():
         finally:
             cur.close()
             conn.close()
-            
+
         return jsonify({
             "id": poster_id,
             "title": title,
             "description": description,
             "photo_url": photo_url
         }), 201
+
     except Exception as e:
         print("Unhandled exception in /posters/upload:", e)
         print(traceback.format_exc())
         return jsonify({"error": "An unexpected error occurred", "details": str(e)}), 500
+    
+@app.route("/debug-multipart", methods=["POST"])
+def debug_multipart():
+    print("Request form keys:", list(request.form.keys()))
+    form_data = {k: request.form.get(k) for k in request.form.keys()}
+    return jsonify(form_data), 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
