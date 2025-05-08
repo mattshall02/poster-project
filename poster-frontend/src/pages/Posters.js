@@ -1,10 +1,11 @@
-// src/Posters.js
+// src/pages/Posters.js
 import React, { useState, useEffect } from 'react';
 
 const Posters = ({ token }) => {
   const [posters, setPosters] = useState([]);
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
+  const [newArtist, setNewArtist] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -36,10 +37,10 @@ const Posters = ({ token }) => {
     event.preventDefault();
     setError(null);
 
-    // Create a FormData object to send multipart/form-data
     const formData = new FormData();
     formData.append("title", newTitle);
     formData.append("description", newDescription);
+    formData.append("artist", newArtist);
     if (selectedFile) {
       formData.append("photo", selectedFile);
     }
@@ -48,7 +49,6 @@ const Posters = ({ token }) => {
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/posters/upload`, {
         method: 'POST',
         headers: {
-          // Do NOT set 'Content-Type'; the browser will set it when using FormData.
           'Authorization': token ? `Bearer ${token}` : ''
         },
         body: formData,
@@ -63,6 +63,7 @@ const Posters = ({ token }) => {
       setPosters([...posters, createdPoster]);
       setNewTitle('');
       setNewDescription('');
+      setNewArtist('');
       setSelectedFile(null);
     } catch (err) {
       setError(err.message);
@@ -74,13 +75,14 @@ const Posters = ({ token }) => {
       <h2>Posters</h2>
       {loading && <p>Loading posters...</p>}
       {error && <p style={{ color: 'red' }}>Error: {error}</p>}
+
       <ul>
         {posters.map((poster) => (
           <li key={poster.id}>
-            <strong>{poster.title}</strong> - {poster.description}  
+            <strong>{poster.title}</strong> by <em>{poster.artist}</em> - {poster.description}
             {poster.photo_url && (
               <div>
-                <img src={poster.photo_url} alt={poster.title} style={{ maxWidth: "200px" }} />
+                <img src={poster.photo_url} alt={poster.title} style={{ maxWidth: '200px' }} />
               </div>
             )}
           </li>
@@ -104,6 +106,14 @@ const Posters = ({ token }) => {
             value={newDescription}
             onChange={(e) => setNewDescription(e.target.value)}
             required
+          />
+        </div>
+        <div>
+          <label>Artist: </label>
+          <input
+            type="text"
+            value={newArtist}
+            onChange={(e) => setNewArtist(e.target.value)}
           />
         </div>
         <div>
