@@ -1,11 +1,11 @@
 // src/App.js
 import React, { useState } from 'react';
 import { jwtDecode } from 'jwt-decode';
-import Login from './Login';
-import Register from './Register';
-import Profile from './Profile';
-import AdminPanel from './AdminPanel';
-import Posters from './Posters';
+import Login from './pages/Login';
+import Register from './pages/Register';
+import Profile from './pages/Profile';
+import AdminPanel from './pages/AdminPanel';
+import Posters from './pages/Posters';
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem("access_token") || "");
