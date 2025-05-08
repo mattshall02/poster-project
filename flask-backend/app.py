@@ -362,6 +362,40 @@ def debug_multipart():
     form_data = {k: request.form.get(k) for k in request.form.keys()}
     return jsonify(form_data), 200
 
+@app.route("/admin/users", methods=["GET"])
+@jwt_required()
+def get_all_users():
+    current_user = get_jwt_identity()
+    if current_user != "admin":
+        return jsonify({"error": "Unauthorized"}), 403
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, username, email, is_verified, created_at FROM users")
+        users = [
+            {
+                "id": row[0],
+                "username": row[1],
+                "email": row[2],
+                "is_verified": row[3],
+                "created_at": row[4].isoformat() if row[4] else None
+            }
+            for row in cur.fetchall()
+        ]
+    except Exception as e:
+        print("Error fetching users:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+    return jsonify(users), 200
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
