@@ -257,111 +257,6 @@ def verify_email():
         conn.close()
     return jsonify({"message": f"Email verified for user '{username}'", "user": {"id": row[0], "username": row[1], "email": row[2], "is_verified": row[3]}}), 200
 
-# ---------------- Poster Endpoints -----------------
-
-@app.route("/posters/upload", methods=["POST"])
-def create_poster_with_photo():
-    try:
-        # Manually extract and decode the JWT token from the Authorization header
-        auth_header = request.headers.get("Authorization", None)
-        if not auth_header:
-            return jsonify({"msg": "Missing Authorization header"}), 401
-        try:
-            token = auth_header.split()[1]
-        except IndexError:
-            return jsonify({"msg": "Invalid Authorization header format"}), 401
-        
-        try:
-            decoded = decode_token(token)
-            current_user = decoded.get("sub")
-        except Exception as e:
-            return jsonify({"msg": "Token decoding failed", "error": str(e)}), 401
-
-        # Log the received form keys for debugging
-        print("Request form keys:", list(request.form.keys()))
-        title = request.form.get("title")
-        description = request.form.get("description")
-        print("Extracted title:", title)
-        print("Extracted description:", description)
-
-        if not title:
-            print("Title is missing!")
-            return jsonify({"error": "Title is required"}), 400
-
-        file_obj = request.files.get("photo")
-        photo_url = None
-        if file_obj:
-            raw_filename = file_obj.filename or "upload"
-            safe_filename = re.sub(r'[^a-z0-9\-_.]', '', raw_filename.lower())
-            filename = f"{uuid.uuid4()}_{safe_filename}"
-            print(f"Uploading file with filename: {filename}")
-            try:
-                photo_url = upload_file_to_bucket(file_obj, BUCKET_NAME, filename)
-                print("File successfully uploaded. Public URL:", photo_url)
-            except Exception as upload_e:
-                print("Error during file upload:", upload_e)
-                return jsonify({"error": "Failed to upload image", "details": str(upload_e)}), 500
-
-        conn = get_db_connection()
-        if not conn:
-            return jsonify({"error": "Database connection failed"}), 500
-        cur = conn.cursor()
-        try:
-            cur.execute(
-                "INSERT INTO posters (title, description, photo_url) VALUES (%s, %s, %s) RETURNING id",
-                (title, description, photo_url)
-            )
-            poster_id = cur.fetchone()[0]
-            conn.commit()
-            print(f"Created poster with id: {poster_id}")
-        except Exception as db_e:
-            print("Error creating poster:", db_e)
-            return jsonify({"error": "Error creating poster", "details": str(db_e)}), 500
-        finally:
-            cur.close()
-            conn.close()
-
-        return jsonify({
-            "id": poster_id,
-            "title": title,
-            "description": description,
-            "photo_url": photo_url
-        }), 201
-
-    except Exception as e:
-        print("Unhandled exception in /posters/upload:", e)
-        print(traceback.format_exc())
-        return jsonify({"error": "An unexpected error occurred", "details": str(e)}), 500
-
-@app.route("/posters", methods=["GET"])
-def list_posters():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT id, title, description, photo_url FROM posters ORDER BY id DESC LIMIT 10")
-        rows = cur.fetchall()
-        posters = [{
-            "id": row[0],
-            "title": row[1],
-            "description": row[2],
-            "photo_url": row[3]
-        } for row in rows]
-        return jsonify(posters), 200
-    except Exception as e:
-        print("Error fetching posters:", e)
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-    
-@app.route("/debug-multipart", methods=["POST"])
-def debug_multipart():
-    print("Request form keys:", list(request.form.keys()))
-    form_data = {k: request.form.get(k) for k in request.form.keys()}
-    return jsonify(form_data), 200
-
 @app.route("/admin/users", methods=["GET"])
 @jwt_required()
 def get_all_users():
@@ -395,6 +290,114 @@ def get_all_users():
 
     return jsonify(users), 200
 
+
+# ---------------- Poster Endpoints -----------------
+
+@app.route("/posters/upload", methods=["POST"])
+def create_poster_with_photo():
+    try:
+        # Manually extract and decode the JWT token from the Authorization header
+        auth_header = request.headers.get("Authorization", None)
+        if not auth_header:
+            return jsonify({"msg": "Missing Authorization header"}), 401
+        try:
+            token = auth_header.split()[1]
+        except IndexError:
+            return jsonify({"msg": "Invalid Authorization header format"}), 401
+        
+        try:
+            decoded = decode_token(token)
+            current_user = decoded.get("sub")
+        except Exception as e:
+            return jsonify({"msg": "Token decoding failed", "error": str(e)}), 401
+
+        # Log the received form keys for debugging
+        print("Request form keys:", list(request.form.keys()))
+        title = request.form.get("title")
+        description = request.form.get("description")
+        artist = request.form.get("artist")  # New field
+        print("Extracted title:", title)
+        print("Extracted description:", description)
+
+        if not title:
+            print("Title is missing!")
+            return jsonify({"error": "Title is required"}), 400
+
+        file_obj = request.files.get("photo")
+        photo_url = None
+        if file_obj:
+            raw_filename = file_obj.filename or "upload"
+            safe_filename = re.sub(r'[^a-z0-9\-_.]', '', raw_filename.lower())
+            filename = f"{uuid.uuid4()}_{safe_filename}"
+            print(f"Uploading file with filename: {filename}")
+            try:
+                photo_url = upload_file_to_bucket(file_obj, BUCKET_NAME, filename)
+                print("File successfully uploaded. Public URL:", photo_url)
+            except Exception as upload_e:
+                print("Error during file upload:", upload_e)
+                return jsonify({"error": "Failed to upload image", "details": str(upload_e)}), 500
+
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO posters (title, description, artist, photo_url) VALUES (%s, %s, %s, %s) RETURNING id",
+                (title, description, artist, photo_url)
+            )
+            poster_id = cur.fetchone()[0]
+            conn.commit()
+            print(f"Created poster with id: {poster_id}")
+        except Exception as db_e:
+            print("Error creating poster:", db_e)
+            return jsonify({"error": "Error creating poster", "details": str(db_e)}), 500
+        finally:
+            cur.close()
+            conn.close()
+
+        return jsonify({
+            "id": poster_id,
+            "title": title,
+            "description": description,
+            "artist": artist,
+            "photo_url": photo_url
+        }), 201
+
+    except Exception as e:
+        print("Unhandled exception in /posters/upload:", e)
+        print(traceback.format_exc())
+        return jsonify({"error": "An unexpected error occurred", "details": str(e)}), 500
+
+@app.route("/posters", methods=["GET"])
+def list_posters():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, title, description, artist, photo_url FROM posters ORDER BY id DESC LIMIT 10")
+        rows = cur.fetchall()
+        posters = [{
+            "id": row[0],
+            "title": row[1],
+            "description": row[2],
+            "artist": row[3],
+            "photo_url": row[4]
+        } for row in rows]
+        return jsonify(posters), 200
+    except Exception as e:
+        print("Error fetching posters:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+    
+@app.route("/debug-multipart", methods=["POST"])
+def debug_multipart():
+    print("Request form keys:", list(request.form.keys()))
+    form_data = {k: request.form.get(k) for k in request.form.keys()}
+    return jsonify(form_data), 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
